@@ -1,4 +1,4 @@
-Oil and Gas ETL
+###Oil and Gas ETL
 
 This repo ingests two Texas RRC PDQ `.dsv` files (delimited by `}`) into Postgres, transforms with PySpark (local mode), orchestrates with Airflow, and models raw → staging → curated with basic DQ checks and idempotent monthly loads.
 
