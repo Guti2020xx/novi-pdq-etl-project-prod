@@ -1,0 +1,88 @@
+version: "3.8"
+
+x-airflow-common:
+  &airflow-common
+  build:
+    context: .
+    dockerfile: ./airflow/Dockerfile
+  env_file:
+    - .env
+  environment:
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/airflow
+    # Pre-provisioned DWH connection for hooks (also used by Spark)
+    AIRFLOW_CONN_DWH_POSTGRES: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/dwh
+    # JDBC info for spark jobs
+    DWH_JDBC_URL: jdbc:postgresql://postgres:5432/dwh
+    DWH_JDBC_USER: airflow
+    DWH_JDBC_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+    # Where data files live inside the Airflow container
+    RAW_DATA_DIR: /opt/airflow/data/raw
+    PYSPARK_PYTHON: python
+  user: "${AIRFLOW_UID:-50000}:0"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./spark_jobs:/opt/airflow/spark_jobs
+    - ./data:/opt/airflow/data
+    - ./sql:/opt/airflow/sql
+  depends_on:
+    - postgres
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: pdq-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql
+      - ./sql/init_dwh.sql:/docker-entrypoint-initdb.d/01_init_dbs.sql
+
+  adminer:
+    image: adminer:4
+    container_name: pdq-adminer
+    restart: always
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command: -c "airflow db migrate && airflow connections delete dwh_postgres || true && airflow connections add dwh_postgres --conn-uri ${AIRFLOW_CONN_DWH_POSTGRES} && airflow users create --username ${AIRFLOW_USERNAME:-admin} --password ${AIRFLOW_PASSWORD:-admin} --firstname J --lastname J --role Admin --email admin@example.com && echo 'Airflow init done.'"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    restart: always
+    volumes:
+    - ./dags:/opt/airflow/dags
+    - ./spark_jobs:/opt/airflow/spark_jobs   # 👈 mount local spark_jobs folder
+    - ./data:/opt/airflow/data               # 👈 if you have raw data
+    # - pgdata:/var/lib/postgresql/data
+  
+volumes:
+  pgdata:
