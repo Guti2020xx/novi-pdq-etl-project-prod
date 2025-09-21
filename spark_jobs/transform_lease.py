@@ -87,10 +87,10 @@ def main(yyyymm: int, jdbc_url: str, user: str, password: str):
     yyyymm_col = F.when(F.col("yyyymm").isNotNull(), F.col("yyyymm")) \
                    .otherwise(y_col * F.lit(100) + m_col)
 
-    oil = F.coalesce(to_num_col("OIL_PROD_VOL"),  to_num_col("LEASE_OIL_PROD_VOL"))
-    gas = F.coalesce(to_num_col("GAS_PROD_VOL"),  to_num_col("LEASE_GAS_PROD_VOL"))
-    cond = F.coalesce(to_num_col("COND_PROD_VOL"), to_num_col("LEASE_COND_PROD_VOL"))
-    csgd = F.coalesce(to_num_col("CSGD_PROD_VOL"), to_num_col("LEASE_CSGD_PROD_VOL"))
+    oil = to_num_col("LEASE_OIL_PROD_VOL")
+    gas = to_num_col("LEASE_GAS_PROD_VOL")
+    cond = to_num_col("LEASE_COND_PROD_VOL")
+    csgd = to_num_col("LEASE_CSGD_PROD_VOL")
 
     wide = parsed.select(
         F.coalesce(to_int_col("OPERATOR_NO"), F.lit(0)).alias("operator_no"),

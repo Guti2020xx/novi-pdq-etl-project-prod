@@ -45,7 +45,7 @@ default_args = {
     "depends_on_past": False,
 }
 
-# --------------- Helpers ----------------
+# Helpers 
 def _parse_pg_env():
     """
     Parse AIRFLOW_CONN_DWH_POSTGRES into psycopg2 params.
@@ -186,7 +186,8 @@ def extract_dsv_to_raw(table: str, input_path: str, yyyymm: int, **_):
             {"y": int(yyyymm)},
         )
 
-    chunksize = 1000000  # <-- use 100k for faster big file processing
+    #used 100k chunk size to try and process file faster
+    chunksize = 1000000  
     total_inserted = 0
 
     for i, chunk in enumerate(pd.read_csv(
@@ -207,7 +208,7 @@ def extract_dsv_to_raw(table: str, input_path: str, yyyymm: int, **_):
         # Vectorized __yyyymm
         chunk["__yyyymm"] = _derive_yyyymm_vectorized(chunk)
 
-        # ✅ Drop invalid + pre-2000 data
+        # Drop invalid + pre-2000 data
         chunk = chunk[chunk["__yyyymm"].notna()]
         chunk = chunk[chunk["__yyyymm"].astype(int) >= 200001]
 
@@ -247,43 +248,128 @@ def extract_dsv_to_raw(table: str, input_path: str, yyyymm: int, **_):
         del rows
         gc.collect()
 
-    print(f"[extract:{table}] ✅ Done. Inserted {total_inserted} rows for yyyymm={yyyymm}")
+    print(f"[extract:{table}] done. Inserted {total_inserted} rows for yyyymm={yyyymm}")
 
 
 
 def dq_rollup_log_fn(yyyymm: int, **_):
-    params = _parse_pg_env()
-    sql = """
-    WITH lease_by_op AS (
-      SELECT operator_no,
-             SUM(COALESCE(oil_bbl,0)) AS oil_bbl,
-             SUM(COALESCE(gas_mcf,0)) AS gas_mcf,
-             SUM(COALESCE(cond_bbl,0)) AS cond_bbl,
-             SUM(COALESCE(csgd_mcf,0)) AS csgd_mcf
-      FROM staging.lease_monthly
-      WHERE yyyymm = %s
-      GROUP BY operator_no
-    )
-    SELECT o.operator_no,
-           o.oil_bbl AS op_oil, l.oil_bbl AS lease_oil,
-           o.gas_mcf AS op_gas, l.gas_mcf AS lease_gas,
-           o.cond_bbl AS op_cond, l.cond_bbl AS lease_cond,
-           o.csgd_mcf AS op_csgd, l.csgd_mcf AS lease_csgd
-    FROM staging.operator_monthly o
-    LEFT JOIN lease_by_op l USING (operator_no)
-    WHERE o.yyyymm = %s
-      AND (
+    params = _parse_pg_env() #includes district and field level roll ups
+    sql = """   
+        WITH lease_by_op AS (
+        SELECT operator_no,
+                SUM(COALESCE(oil_bbl,0)) AS oil_bbl,
+                SUM(COALESCE(gas_mcf,0)) AS gas_mcf,
+                SUM(COALESCE(cond_bbl,0)) AS cond_bbl,
+                SUM(COALESCE(csgd_mcf,0)) AS csgd_mcf
+        FROM staging.lease_monthly
+        WHERE yyyymm = %s
+        GROUP BY operator_no
+        ),
+        lease_by_dist AS (
+        SELECT district_no,
+                SUM(COALESCE(oil_bbl,0)) AS oil_bbl,
+                SUM(COALESCE(gas_mcf,0)) AS gas_mcf,
+                SUM(COALESCE(cond_bbl,0)) AS cond_bbl,
+                SUM(COALESCE(csgd_mcf,0)) AS csgd_mcf
+        FROM staging.lease_monthly
+        WHERE yyyymm = %s
+        GROUP BY district_no
+        ),
+        lease_by_field AS (
+        SELECT field_no,
+                SUM(COALESCE(oil_bbl,0)) AS oil_bbl,
+                SUM(COALESCE(gas_mcf,0)) AS gas_mcf,
+                SUM(COALESCE(cond_bbl,0)) AS cond_bbl,
+                SUM(COALESCE(csgd_mcf,0)) AS csgd_mcf
+        FROM staging.lease_monthly
+        WHERE yyyymm = %s
+        GROUP BY field_no
+        ),
+        op_rollup AS (
+        SELECT operator_no, yyyymm,
+                SUM(oil_bbl) AS oil_bbl,
+                SUM(gas_mcf) AS gas_mcf,
+                SUM(cond_bbl) AS cond_bbl,
+                SUM(csgd_mcf) AS csgd_mcf
+        FROM staging.operator_monthly
+        WHERE yyyymm = %s
+        GROUP BY operator_no, yyyymm
+        ),
+        dist_rollup AS (
+        SELECT district_no, yyyymm,
+                SUM(oil_bbl) AS oil_bbl,
+                SUM(gas_mcf) AS gas_mcf,
+                SUM(cond_bbl) AS cond_bbl,
+                SUM(csgd_mcf) AS csgd_mcf
+        FROM staging.operator_monthly
+        WHERE yyyymm = %s
+        GROUP BY district_no, yyyymm
+        ),
+        field_rollup AS (
+        SELECT field_no, yyyymm,
+                SUM(oil_bbl) AS oil_bbl,
+                SUM(gas_mcf) AS gas_mcf,
+                SUM(cond_bbl) AS cond_bbl,
+                SUM(csgd_mcf) AS csgd_mcf
+        FROM staging.operator_monthly
+        WHERE yyyymm = %s
+        GROUP BY field_no, yyyymm
+        )
+        SELECT 'operator_vs_lease' AS check_type,
+            o.operator_no,
+            o.oil_bbl AS op_oil, l.oil_bbl AS lease_oil,
+            o.gas_mcf AS op_gas, l.gas_mcf AS lease_gas,
+            o.cond_bbl AS op_cond, l.cond_bbl AS lease_cond,
+            o.csgd_mcf AS op_csgd, l.csgd_mcf AS lease_csgd
+        FROM op_rollup o
+        LEFT JOIN lease_by_op l USING (operator_no)
+        WHERE (
         ABS(COALESCE(o.oil_bbl,0) - COALESCE(l.oil_bbl,0)) > 0.5 OR
         ABS(COALESCE(o.gas_mcf,0) - COALESCE(l.gas_mcf,0)) > 0.5 OR
         ABS(COALESCE(o.cond_bbl,0) - COALESCE(l.cond_bbl,0)) > 0.5 OR
         ABS(COALESCE(o.csgd_mcf,0) - COALESCE(l.csgd_mcf,0)) > 0.5
-      )
-    ORDER BY o.operator_no;
-    """
+        )
+
+        UNION ALL
+
+        SELECT 'district_rollup' AS check_type,
+            o.district_no,
+            o.oil_bbl AS op_oil, l.oil_bbl AS lease_oil,
+            o.gas_mcf AS op_gas, l.gas_mcf AS lease_gas,
+            o.cond_bbl AS op_cond, l.cond_bbl AS lease_cond,
+            o.csgd_mcf AS op_csgd, l.csgd_mcf AS lease_csgd
+        FROM dist_rollup o
+        LEFT JOIN lease_by_dist l USING (district_no)
+        WHERE (
+        ABS(COALESCE(o.oil_bbl,0) - COALESCE(l.oil_bbl,0)) > 0.5 OR
+        ABS(COALESCE(o.gas_mcf,0) - COALESCE(l.gas_mcf,0)) > 0.5 OR
+        ABS(COALESCE(o.cond_bbl,0) - COALESCE(l.cond_bbl,0)) > 0.5 OR
+        ABS(COALESCE(o.csgd_mcf,0) - COALESCE(l.csgd_mcf,0)) > 0.5
+        )
+
+        UNION ALL
+
+        SELECT 'field_rollup' AS check_type,
+            o.field_no,
+            o.oil_bbl AS op_oil, l.oil_bbl AS lease_oil,
+            o.gas_mcf AS op_gas, l.gas_mcf AS lease_gas,
+            o.cond_bbl AS op_cond, l.cond_bbl AS lease_cond,
+            o.csgd_mcf AS op_csgd, l.csgd_mcf AS lease_csgd
+        FROM field_rollup o
+        LEFT JOIN lease_by_field l USING (field_no)
+        WHERE (
+        ABS(COALESCE(o.oil_bbl,0) - COALESCE(l.oil_bbl,0)) > 0.5 OR
+        ABS(COALESCE(o.gas_mcf,0) - COALESCE(l.gas_mcf,0)) > 0.5 OR
+        ABS(COALESCE(o.cond_bbl,0) - COALESCE(l.cond_bbl,0)) > 0.5 OR
+        ABS(COALESCE(o.csgd_mcf,0) - COALESCE(l.csgd_mcf,0)) > 0.5
+        )
+        ORDER BY check_type;
+        """
+
     conn = psycopg2.connect(**params)
     with conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (int(yyyymm), int(yyyymm)))
+        with conn.cursor() as cur: # 6 times called now
+            cur.execute(sql, (int(yyyymm), int(yyyymm), int(yyyymm), int(yyyymm), int(yyyymm), int(yyyymm),))
             rows = cur.fetchall()
             if rows:
                 print(f"[DQ] Found {len(rows)} operator vs lease rollup mismatches for {yyyymm}:")

@@ -84,5 +84,19 @@ services:
     - ./data:/opt/airflow/data               # 👈 if you have raw data
     # - pgdata:/var/lib/postgresql/data
   
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - postgres
+    volumes:
+      - grafana-storage:/var/lib/grafana
+  
 volumes:
   pgdata:
+  grafana-storage:

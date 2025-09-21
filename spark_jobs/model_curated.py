@@ -164,7 +164,7 @@ def main(yyyymm: int, jdbc_url: str, user: str, password: str):
       .option("user", user).option("password", password) \
       .option("driver", "org.postgresql.Driver").save()
 
-    lease.select("lease_key", "yyyymm", "oil_bbl", "gas_mcf", "cond_bbl", "csgd_mcf") \
+    lease.select("lease_key", "operator_no", "district_no", "field_no", "yyyymm", "oil_bbl", "gas_mcf", "cond_bbl", "csgd_mcf") \
       .write.mode("append").format("jdbc") \
       .option("url", jdbc_url).option("dbtable", "curated.fact_lease_monthly") \
       .option("user", user).option("password", password) \
