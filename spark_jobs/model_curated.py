@@ -115,10 +115,28 @@ def main(yyyymm: int, jdbc_url: str, user: str, password: str):
           .option("driver", "org.postgresql.Driver").load())
 
     lease = (spark.read.format("jdbc")
-          .option("url", jdbc_url)
-          .option("dbtable", f"(SELECT * FROM staging.lease_monthly WHERE yyyymm = {yyyymm}) x")
-          .option("user", user).option("password", password)
-          .option("driver", "org.postgresql.Driver").load())
+    .option("url", jdbc_url)
+    .option("dbtable", f"""
+        (SELECT operator_no,
+                district_no,
+                field_no,
+                lease_no,
+                lease_name,
+                lease_key,
+                yyyymm,
+                oil_bbl,
+                gas_mcf,
+                cond_bbl,
+                csgd_mcf
+         FROM staging.lease_monthly
+         WHERE yyyymm = {yyyymm}) x
+    """)
+    .option("user", user).option("password", password)
+    .option("driver", "org.postgresql.Driver").load())
+
+#checking if jdbc is building schema properly for model curated
+    lease.printSchema()
+    lease.show(5, truncate=False)
 
     # ---------- Load dim staging (persistent tables) ----------
     # dim_operator load
