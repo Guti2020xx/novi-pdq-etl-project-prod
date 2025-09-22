@@ -186,7 +186,7 @@ def extract_dsv_to_raw(table: str, input_path: str, yyyymm: int, **_):
             {"y": int(yyyymm)},
         )
 
-    #used 100k chunk size to try and process file faster
+    #used 1M chunk size to try and process file faster
     chunksize = 1000000  
     total_inserted = 0
 
